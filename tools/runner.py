@@ -144,6 +144,8 @@ def create(name, content) -> dict | None:
     try:
         config.TOOLS_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+        # write_text follows the umask; tool scripts are meant to be readable.
+        os.chmod(path, 0o644)
     except OSError:
         return None
     return _record(path.stem, path)

@@ -420,11 +420,16 @@ class CatalogTests(MemoryTestCase):
         self.assertEqual(row, ("knowledge", "rebuildable", "rebuild-check", "rebuild-check"))
 
     def test_rebuild_skips_undecodable_files(self):
+        # Seed a valid file so the assertion does not depend on whatever memory
+        # the repository happens to ship.
+        self._track_topic("decodable")
+        save_knowledge.save_knowledge("decodable", "Body.", tags="decode-check")
         broken = config.KNOWLEDGE_DIR / "broken-rebuild.md"
         broken.write_bytes(b"\xff\xfe\x00bad\xff")
         self.addCleanup(broken.unlink, missing_ok=True)
         self.assertGreaterEqual(search.rebuild(), 1)
         self.assertNotIn("knowledge/broken-rebuild.md", self._rows())
+        self.assertIn("knowledge/decodable.md", self._rows())
 
 
 if __name__ == "__main__":
