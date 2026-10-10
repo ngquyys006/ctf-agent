@@ -69,18 +69,25 @@ decision is yours.
 
 ### Tool Decision Framework
 
-**KEEP script trong `tools/scripts/` khi tool đáp ứng:**
-- [ ] **Tái sử dụng được**: Giải quyết được *loại challenge tương tự* (không chỉ 1 challenge cụ thể)
-- [ ] **Đã test thành công**: Chạy qua `runner.run()`, exit_code=0, output có ý nghĩa
-- [ ] **Code sạch**: Không hardcode URL/credential cụ thể, dùng arguments linh hoạt
-- [ ] **Đủ tổng quát**: Xử lý được nhiều biến thể (ví dụ: SQLi login bypass cho nhiều lab PortSwigger, không chỉ 1 lab)
-- [ ] **Có docstring chuẩn**: Description, Category, Arguments rõ ràng (`runner` tự parse)
+**KEEP the script in `tools/scripts/` when it meets all of:**
+- [ ] **Reusable**: solves a *class of similar challenges*, not just one specific challenge
+- [ ] **Tested successfully**: ran through `runner.run()`, exit_code=0, meaningful output
+- [ ] **Clean code**: no hardcoded URLs or credentials, uses flexible arguments
+- [ ] **General enough**: handles many variants (e.g. SQLi login bypass across several PortSwigger labs, not just one)
+- [ ] **Proper docstring**: clear Description, Category, Arguments (the `runner` parses these)
 
-**REMOVE (xoá hẳn) khi:**
-- [ ] Tool chỉ dành cho 1 challenge duy nhất (hardcoded target, payload cụ thể)
-- [ ] Code thô, test chưa qua, logic sai
-- [ ] Chức năng trùng tool đã có sẵn
-- [ ] Chỉ dùng 1 lần xong (recon đơn lẻ, test payload thử)
+**REMOVE (delete it) when:**
+- [ ] It serves exactly one challenge (hardcoded target or payload)
+- [ ] Rough code, untested, or wrong logic
+- [ ] It duplicates a tool that already exists
+- [ ] It was used once and done (one-off recon, a payload test)
+
+## Memory rules
+
+- **Write Knowledge and Experience in English.** The search tokenizer splits on
+  ASCII word characters, so accented text is shredded into fragments and the
+  record becomes hard to find again. English keeps memory reliably searchable.
+- Keep metadata values single-line; never embed newlines in a tag or technique.
 
 ## Memory decisions
 
