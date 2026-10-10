@@ -1,0 +1,11 @@
+# Secrets and environment-specific values must not be committed (spec section 35).
+.env
+
+# SQLite memory index is rebuildable metadata (spec sections 14, 39); content lives in Markdown.
+memory/memory.db
+memory/memory.db-shm
+memory/memory.db-wal
+
+# Python artifacts.
+__pycache__/
+*.pyc
