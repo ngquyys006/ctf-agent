@@ -85,6 +85,24 @@ class SearchTests(MemoryTestCase):
         self.assertEqual(len(search.search("limit", memory_type="experience")), 5)
         self.assertEqual(len(search.search("limit", memory_type="experience", limit=2)), 2)
 
+    def test_search_finds_a_record_by_its_file_name(self):
+        # A challenge ID lives in the file name; it must stay searchable so
+        # Agent can ask "have I solved this one before?".
+        self._track_experience("lab-codename-9001")
+        save_experience.save_experience("lab-codename-9001", "Codename", "Body.",
+                                        tags="ordinary-tag", technique="plain")
+        for query in ("codename", "lab-codename-9001", "9001"):
+            hits = search.search(query, memory_type="experience")
+            self.assertIn("experiences/lab-codename-9001.md",
+                          [r["path"] for r in hits], query)
+
+    def test_search_keeps_exact_title_on_top(self):
+        self._track_topic("scorer")
+        save_knowledge.save_knowledge("scorer", "Body.", tags="alpha", technique="alpha")
+        results = search.search("scorer")
+        self.assertEqual(results[0]["path"], "knowledge/scorer.md")
+        self.assertEqual(results[0]["score"], 1.0)
+
     def test_search_empty_query_and_no_match(self):
         self.assertEqual(search.search(""), [])
         self.assertEqual(search.search("zzzznothingmatches"), [])

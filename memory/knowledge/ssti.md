@@ -101,10 +101,13 @@ Reading files without a shell, using builtins only:
 - **One command per request.** Concatenating several commands in one
   expression risks output that carries raw markup and breaks the surrounding
   render (observed as HTTP 500). Isolate commands when output is untrusted.
-- **Quotes and filters.** If `'`, `"` or `_` are stripped or blocked, use
-  `chr()`/`attr()`/`[]` indexing instead of literal attribute names, or read
-  the missing value back out of a request header/meta you control and reuse
-  it.
+- **Quotes and filters.** If `'`, `"` or `_` is stripped, go to "Bypassing
+  character-stripping filters" below: rebuild the character with a `\xNN`
+  escape and reach attributes with `|attr()`. Do **not** assume `[]`
+  indexing still works - a character-strip filter usually removes `[` and `]`
+  as well, so indexing fails for the same reason dots do. When a whole
+  *substring* is blocked and escapes cannot express it, send that substring in
+  a request header you control and read it back out of the request object.
 
 ## Sandboxed / non-RCE targets
 

@@ -32,6 +32,7 @@ _SCORE_TECHNIQUE = 0.35
 _SCORE_TAG = 0.25
 _SCORE_TECHNIQUE_KEYWORD = 0.15
 _SCORE_TITLE_KEYWORD = 0.15
+_SCORE_PATH_KEYWORD = 0.10
 _SCORE_SUBSTRING = 0.05
 
 _SELECT = "SELECT id, type, title, path, tags, technique FROM memories"
@@ -170,12 +171,19 @@ def _heal() -> None:
 
 
 def _score(record: dict, query_lower: str, tokens: list[str]) -> float:
-    """Score one catalog record against a query (spec section 33)."""
+    """Score one catalog record against a query (spec section 33).
+
+    Matches title, tags, technique and the record's own path, so a query
+    naming the file (a challenge ID such as "xebec-ssti2-charfilter")
+    still finds the record. The path is already stored in the catalog, so
+    this adds recall without touching the Markdown files.
+    """
     if not tokens:
         return 0.0
     title = (record.get("title") or "").lower()
     technique = (record.get("technique") or "").lower()
     tags = (record.get("tags") or "").lower()
+    path = (record.get("path") or "").lower()
 
     # 1. Exact title match.
     if query_lower == title:
@@ -186,13 +194,13 @@ def _score(record: dict, query_lower: str, tokens: list[str]) -> float:
     # 2. Technique match.
     if query_lower in technique:
         score += _SCORE_TECHNIQUE
-    # 3-4. Tag and keyword matches, weighted by query-token coverage.
+    # 3-5. Tag, keyword and path matches, weighted by query-token coverage.
     for field, weight in ((tags, _SCORE_TAG), (technique, _SCORE_TECHNIQUE_KEYWORD),
-                          (title, _SCORE_TITLE_KEYWORD)):
+                          (title, _SCORE_TITLE_KEYWORD), (path, _SCORE_PATH_KEYWORD)):
         hits = sum(1 for token in tokens if token in set(_tokenize(field)))
         if hits:
             score += weight * (hits / total)
-    # 5. Fallback substring match in tags/technique.
+    # 6. Fallback substring match in tags/technique.
     if any(token in tags or token in technique for token in tokens):
         score += _SCORE_SUBSTRING
     return min(score, 1.0)
