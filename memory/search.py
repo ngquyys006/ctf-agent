@@ -15,6 +15,7 @@ loads all memory (spec sections 11, 32). A score is a retrieval aid only; the
 Agent decides whether a candidate is actually relevant.
 """
 
+import pathlib
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -39,12 +40,12 @@ _SCORE_FULLTEXT = 0.10
 _SCORE_SUBSTRING = 0.05
 
 # Token sets of one memory document, keyed by memory-relative path and valid
-# only for the mtime they were read at. Metadata outranks full text, so these
-# are ranked as separate fields rather than as one blob. Bodies are read for
-# scoring alone and are never returned to the Agent, so the catalog still
-# stores metadata only (spec sections 14, 99) and context stays bounded
-# (spec section 32).
-_DOCUMENT_TOKENS: dict[str, tuple[float, dict]] = {}
+# only while the file mtime and the catalog metadata are both unchanged.
+# Metadata outranks full text, so these are ranked as separate fields rather
+# than as one blob. Bodies are read for scoring alone and are never returned
+# to the Agent, so the catalog still stores metadata only (spec sections 14,
+# 99) and context stays bounded (spec section 32).
+_DOCUMENT_TOKENS: dict[str, tuple[float, tuple, dict]] = {}
 
 _SELECT = "SELECT id, type, title, path, tags, technique, updated_at FROM memories"
 _UPSERT = (
@@ -57,12 +58,27 @@ _UPSERT = (
 
 
 def _connect() -> sqlite3.Connection:
-    """Open the metadata catalog, creating the schema when missing."""
+    """Open the metadata catalog, creating the schema when missing.
+
+    memory.db is derived data, so a file that is not a usable database is
+    discarded and recreated rather than raised. The Markdown files are the
+    source of truth and rebuild() can restore the catalog from them, so
+    losing this file costs nothing (spec sections 14, 38, 39).
+    """
     config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.DATABASE_PATH)
-    conn.executescript(config.DATABASE_SCHEMA)
-    conn.commit()
-    return conn
+    for attempt in (1, 2):
+        try:
+            conn = sqlite3.connect(config.DATABASE_PATH)
+            conn.executescript(config.DATABASE_SCHEMA)
+            conn.commit()
+            return conn
+        except sqlite3.DatabaseError:
+            if attempt == 2:
+                raise
+            # Not a database, or too damaged to hold the schema. Remove it
+            # and let the next attempt start from an empty file.
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                pathlib.Path(str(config.DATABASE_PATH) + suffix).unlink(missing_ok=True)
 
 
 def _tokenize(text) -> list[str]:
@@ -136,11 +152,12 @@ def _document_tokens(relative: str, metadata: dict) -> dict | None:
     find the record: tags are chosen once when the memory is written, but the
     words that identify a new challenge are whatever the target exposes.
 
-    Metadata tokens come from the catalog row, body tokens from the file, and
-    both are cached against the file mtime. Every writer in this project
-    rewrites the Markdown when it changes metadata, so the mtime tells us
-    whether the cached sets are still good and repeated searches do not
-    re-tokenize the same text.
+    Cached against two things, because the two token groups come from two
+    different places: the file mtime for the body, and the metadata fields
+    themselves for title, tags and technique. The mtime alone is not enough.
+    A catalog restored from an older memory.db carries different tags for an
+    unchanged Markdown file, and keying only on mtime would keep serving the
+    tags of whichever version was cached first.
 
     Returns None when the file has gone or cannot be read, which is how the
     caller recognises a catalog row with no document behind it.
@@ -151,21 +168,25 @@ def _document_tokens(relative: str, metadata: dict) -> dict | None:
     except OSError:
         _DOCUMENT_TOKENS.pop(relative, None)
         return None
+    title = metadata.get("title") or ""
+    tags = metadata.get("tags") or ""
+    technique = metadata.get("technique") or ""
+    signature = (title, tags, technique)
     cached = _DOCUMENT_TOKENS.get(relative)
-    if cached is not None and cached[0] == stamp:
-        return cached[1]
+    if cached is not None and cached[0] == stamp and cached[1] == signature:
+        return cached[2]
     try:
         body = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         body = ""
     tokens = {
-        "title": frozenset(_tokenize(metadata.get("title"))),
-        "tags": frozenset(_tokenize(metadata.get("tags"))),
-        "technique": frozenset(_tokenize(metadata.get("technique"))),
+        "title": frozenset(_tokenize(title)),
+        "tags": frozenset(_tokenize(tags)),
+        "technique": frozenset(_tokenize(technique)),
         "path": frozenset(_tokenize(relative)),
         "body": frozenset(_tokenize(body)),
     }
-    _DOCUMENT_TOKENS[relative] = (stamp, tokens)
+    _DOCUMENT_TOKENS[relative] = (stamp, signature, tokens)
     return tokens
 
 

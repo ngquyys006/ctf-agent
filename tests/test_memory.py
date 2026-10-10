@@ -213,6 +213,48 @@ class FullTextSearchTests(MemoryTestCase):
         self.assertEqual(search.search("originaltag", memory_type="experience"), [])
         self.assertTrue(search.search("freshtag", memory_type="experience"))
 
+    def test_catalog_metadata_change_invalidates_cached_tokens(self):
+        # memory.db is derived data (spec sections 14, 39), so a catalog can
+        # carry metadata that disagrees with an unchanged Markdown file. The
+        # file mtime alone would not notice, and the stale tags would keep
+        # answering queries.
+        #
+        # The tags are deliberately absent from the Markdown: every writer
+        # also records tags in the file's own Metadata block, so a tag word
+        # left in the body would keep matching through full-text and hide
+        # which cache produced the hit.
+        self._lab("lab-restored", "Restored lab", "alphaword", "betaword",
+                  "## Challenge Summary\nUnrelated prose only.\n")
+        # Strip the tag words from the file so only the catalog can match them.
+        path = config.EXPERIENCE_DIR / "lab-restored.md"
+        text = path.read_text(encoding="utf-8")
+        text = text.replace("Tags: alphaword", "Tags:").replace("Technique: betaword", "")
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o644)
+        self.assertTrue(search.search("alphaword", memory_type="experience"))
+        conn = sqlite3.connect(config.DATABASE_PATH)
+        try:
+            conn.execute("UPDATE memories SET tags = 'gammaword', technique = 'deltaword'"
+                         " WHERE path = 'experiences/lab-restored.md'")
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(search.search("alphaword", memory_type="experience"), [])
+        self.assertTrue(search.search("gammaword", memory_type="experience"))
+
+    def test_a_restored_catalog_replaces_the_file_metadata_in_results(self):
+        # rebuild() is what normally reconciles the two. Until it runs, search
+        # must still report the catalog's view, not the file's.
+        self._lab("lab-override", "Override lab", "filetag", "filetech",
+                  "## Challenge Summary\nProse.\n")
+        conn = sqlite3.connect(config.DATABASE_PATH)
+        try:
+            conn.execute("UPDATE memories SET tags = 'dbtag' WHERE path = 'experiences/lab-override.md'")
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(search.search("dbtag")[0]["tags"], "dbtag")
+
     def test_tied_scores_are_ordered_most_recently_updated_first(self):
         # Several labs of one class score identically. Ordering those by the
         # catalog id would hand back whichever was written first, so the
@@ -232,6 +274,27 @@ class FullTextSearchTests(MemoryTestCase):
                   "## Challenge Summary\nMentions xss once in passing.\n")
         ranked = [r["path"] for r in search.search("xss", memory_type="experience")]
         self.assertEqual(ranked[0], "experiences/lab-old-hit.md")
+
+    def test_a_corrupt_database_is_rebuilt_rather_than_raised(self):
+        # memory.db is derived data, so garbage in that file must not take
+        # search down with it (spec sections 14, 38).
+        self._lab("lab-corrupt", "Corrupt lab", "corruptcheck", "corruptcheck",
+                  "## Challenge Summary\nBody survives.\n")
+        self.assertTrue(search.search("corruptcheck", memory_type="experience"))
+        config.DATABASE_PATH.write_bytes(b"this is not a database" * 40)
+        results = search.search("corruptcheck", memory_type="experience")
+        self.assertEqual([r["path"] for r in results], ["experiences/lab-corrupt.md"])
+        self.assertEqual(results[0]["tags"], "corruptcheck")
+        self.assertIn("Body survives",
+                      search.read("lab-corrupt")["content"])
+
+    def test_an_empty_database_file_is_rebuilt(self):
+        self._lab("lab-empty-db", "Empty db lab", "emptydbcheck", "emptydbcheck",
+                  "## Challenge Summary\nBody.\n")
+        config.DATABASE_PATH.write_bytes(b"")
+        self.assertEqual([r["path"] for r in
+                          search.search("emptydbcheck", memory_type="experience")],
+                         ["experiences/lab-empty-db.md"])
 
     def test_search_does_not_retokenize_the_same_document(self):
         self._lab("lab-token", "Token lab", "token-tag", "token-tech",
