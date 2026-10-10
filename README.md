@@ -102,8 +102,8 @@ challenges).
   search memory proactively on every challenge. Searches are ranked (exact title match first, then
   technique, tag, and keyword matches, weighted by how much of the query is
   covered, then full-text matches against the Markdown body, then substring)
-  and limited (default 5 results). There is no operation that loads
-  all memory.
+  and limited (default 5 results). Equal scores are ordered
+  most-recently-updated first. There is no operation that loads all memory.
 * **Writes go through the memory modules.** Each writing module validates the
   name, prevents writes outside the memory directories, writes the Markdown
   file atomically, and writes the SQLite row in the same operation. Agent

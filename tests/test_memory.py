@@ -195,10 +195,62 @@ class FullTextSearchTests(MemoryTestCase):
     def test_a_deleted_memory_does_not_pin_its_cached_tokens(self):
         self._lab("lab-pinned", "Pinned lab", "web", "web", "## Challenge Summary\npinnedword here.\n")
         self.assertTrue(search.search("pinnedword", memory_type="experience"))
-        self.assertIn("experiences/lab-pinned.md", search._CONTENT_TOKENS)
+        self.assertIn("experiences/lab-pinned.md", search._DOCUMENT_TOKENS)
         config.EXPERIENCE_DIR.joinpath("lab-pinned.md").unlink()
         search.search("pinnedword", memory_type="experience")
-        self.assertNotIn("experiences/lab-pinned.md", search._CONTENT_TOKENS)
+        self.assertNotIn("experiences/lab-pinned.md", search._DOCUMENT_TOKENS)
+
+    def test_metadata_change_is_reflected_without_a_rebuild(self):
+        self._lab("lab-retag", "Retagged lab", "originaltag", "originaltech",
+                  "## Challenge Summary\nUnrelated words.\n")
+        self.assertTrue(search.search("originaltag", memory_type="experience"))
+        path = config.EXPERIENCE_DIR / "lab-retag.md"
+        text = (path.read_text(encoding="utf-8")
+                .replace("originaltag", "freshtag").replace("originaltech", "freshtech"))
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o644)
+        search.rebuild()
+        self.assertEqual(search.search("originaltag", memory_type="experience"), [])
+        self.assertTrue(search.search("freshtag", memory_type="experience"))
+
+    def test_tied_scores_are_ordered_most_recently_updated_first(self):
+        # Several labs of one class score identically. Ordering those by the
+        # catalog id would hand back whichever was written first, so the
+        # freshest Experience has to lead instead.
+        for index in range(4):
+            self._lab(f"lab-order-{index}", f"Shared class lab {index}",
+                      "shared-tag", "shared-tech",
+                      f"## Challenge Summary\nThe same sharedtext in every lab. Variant {index}.\n")
+        ordered = [r["path"] for r in search.search("sharedtext", memory_type="experience")]
+        self.assertEqual(ordered, [f"experiences/lab-order-{i}.md" for i in reversed(range(4))])
+
+    def test_a_higher_score_still_beats_a_more_recent_twin(self):
+        # Recency only breaks ties; it must not outrank relevance.
+        self._lab("lab-old-hit", "Old but tagged", "xss", "xss",
+                  "## Challenge Summary\nUnrelated body.\n")
+        self._lab("lab-new-miss", "New but incidental", "web", "web",
+                  "## Challenge Summary\nMentions xss once in passing.\n")
+        ranked = [r["path"] for r in search.search("xss", memory_type="experience")]
+        self.assertEqual(ranked[0], "experiences/lab-old-hit.md")
+
+    def test_search_does_not_retokenize_the_same_document(self):
+        self._lab("lab-token", "Token lab", "token-tag", "token-tech",
+                  "## Challenge Summary\ntokenword body.\n")
+        search.search("tokenword", memory_type="experience")
+        original = search._tokenize
+        calls = []
+
+        def counting(text):
+            calls.append(text)
+            return original(text)
+
+        search._tokenize = counting
+        self.addCleanup(setattr, search, "_tokenize", original)
+        search.search("tokenword", memory_type="experience")
+        search.search("tokenword", memory_type="experience")
+        # Only the query itself should be tokenized; document text comes from
+        # the cache keyed on mtime.
+        self.assertEqual(len(calls), 2, calls)
 
 
 class ReadTests(MemoryTestCase):

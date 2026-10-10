@@ -1274,6 +1274,12 @@ whatever the target happens to expose. The catalog still stores metadata
 only; bodies are read to score them and cached against file mtime, and are
 never returned to Agent.
 
+Equal scores are ordered by `updated_at`, most recent first. Ties are common
+once a vulnerability class has several Experience files, and there is no
+relevance difference among them; returning the freshest first means the
+Agent reads a superseded attempt last rather than first. Score still
+outranks recency, so a weaker match never displaces a stronger one.
+
 Example:
 
 Query:
