@@ -26,7 +26,6 @@ Phải đọc và hiểu đầy đủ:
 * Knowledge
 * Experience
 * hệ thống Tools
-* Sandbox
 * quy trình giải CTF
 * cách sử dụng các thành phần của CTF-Agent
 * giới hạn của hệ thống
@@ -70,7 +69,7 @@ Mọi:
 
 đều phải do **AI Agent hiện tại** quyết định.
 
-Memory, Knowledge, Experience, Tools và Sandbox chỉ là các thành phần hỗ trợ. Chúng **không được trở thành một bộ não hoặc hệ thống suy luận độc lập**.
+Memory, Knowledge, Experience và Tools chỉ là các thành phần hỗ trợ. Chúng **không được trở thành một bộ não hoặc hệ thống suy luận độc lập**.
 
 ---
 

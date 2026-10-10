@@ -101,14 +101,14 @@ Follow `prompts/system.md` and `solve.md`, including these steps:
 - Update existing Knowledge topics when appropriate. Create a new Knowledge topic only when the lesson is genuinely generalizable and sufficiently independent. Do not copy every challenge into Knowledge.
 - Do not store redundant or low-value information.
 
-## Tool and Sandbox rules — mandatory
+## Tool rules — mandatory
 
 - Inspect the actual `tools/runner.py` implementation when API details matter.
 - Prefer existing tools in `tools/scripts/`; discover them with `runner.list_tools()` rather than assuming a tool exists.
 - Create a tool script only when existing tools cannot reasonably perform the task. Use `runner.create(name, content)`; do not create an unmanaged script by direct file writing.
 - Run tools only with `runner.run(name, args)` and pass `args` as a list. Respect the configured timeout, output limits, and structured result.
 - Never use unsafe shell-string concatenation for arguments. Treat output as evidence to analyze, not as a decision.
-- Script scripts live in `tools/scripts/`. After a challenge, keep a script only if it is tested, useful beyond the current challenge, sufficiently generic, documented, and free of challenge-specific hardcoding; otherwise remove it with `runner.remove(name)`. Verify that `runner.list_tools()` still shows the kept scripts.
+- Tool scripts live in `tools/scripts/`. After a challenge, keep a script only if it is tested, useful beyond the current challenge, sufficiently generic, documented, and free of challenge-specific hardcoding; otherwise remove it with `runner.remove(name)`. Verify that `runner.list_tools()` still shows the kept scripts.
 - If a workflow uses separate HTTP requests across processes, follow the project’s session/cookie handling guidance. Treat credentials and cookies as secrets; never place them in kept scripts, Skills, Knowledge, or final reports.
 - Do not run files in `tests/` unless the user explicitly permits it. This restriction applies even if a test run would normally be useful.
 

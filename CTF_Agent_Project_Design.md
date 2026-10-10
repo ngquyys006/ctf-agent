@@ -1056,7 +1056,11 @@ At minimum:
 * Do not allow scripts to overwrite project files unless explicitly permitted.
 * Keep tool execution isolated as much as practical.
 
-The exact sandboxing mechanism may evolve later.
+Isolation is provided by the runner rather than by a separate sandbox
+directory: scripts are restricted to `tools/scripts/`, validated before they
+run, and executed as a subprocess under a timeout with a capped output. A
+script is not confined from the filesystem it runs on, so Agent must not keep
+a script that writes outside what the challenge needs.
 
 ---
 
@@ -1319,8 +1323,7 @@ DATABASE_PATH
 
 TOOLS_DIR
 TOOLS_SCRIPTS_DIR
-SANDBOX_DIR
-GENERATED_TOOLS_DIR
+SYSTEM_PROMPT_PATH
 
 DEFAULT_TIMEOUT
 MAX_OUTPUT_SIZE
@@ -1461,6 +1464,15 @@ This allows the Markdown files to remain the source of truth for content.
 The DB is rebuildable metadata.
 
 Do not make the project dependent on irreplaceable DB-only content.
+
+Reindexing happens on its own. Before answering, search compares the indexed
+paths against the files on disk and rebuilds when they differ, so a catalog
+that was deleted, restored from an older copy, or edited by hand cannot leave
+memory silently unreachable. Checking only for an empty catalog is not
+enough: losing it and then writing a new memory recreates it with one row,
+which looks healthy while everything else has dropped out of search. A file
+that is not a usable database is discarded and recreated rather than raised,
+in every module that opens the catalog.
 
 ---
 
@@ -1773,17 +1785,17 @@ The entire project can be understood as:
                     Agent
                   THE BRAIN
                       │
-        ┌─────────────┼─────────────┐
-        │             │             │
-        ▼             ▼             ▼
-     MEMORY         TOOLS        SANDBOX
-        │             │             │
-        │             │             │
-   remember        execute       create/test
-        │             │             │
-        ▼             ▼             ▼
-     Markdown       scripts      temporary
-        +
+        ┌─────────────┴─────────────┐
+        │                           │
+        ▼                           ▼
+     MEMORY                        TOOLS
+        │                           │
+        │                           │
+   remember                 create / execute
+        │                           │
+        ▼                           ▼
+     Markdown                    scripts
+        +                    tools/scripts/
       SQLite
 ```
 
@@ -1791,9 +1803,8 @@ Agent decides what to do.
 
 Memory helps Agent remember.
 
-Tools help Agent act.
-
-Sandbox allows Agent to create new capabilities when necessary.
+Tools help Agent act, and Agent creates a new script when none of the
+existing ones fit. Nothing decides for Agent.
 
 ---
 
@@ -1897,17 +1908,19 @@ KNOWLEDGE = GENERAL KNOWLEDGE
 
 EXPERIENCE = SPECIFIC PAST EXPERIENCE
 
-INDEX = FIND MEMORY
+SEARCH = FIND MEMORY
 
 DATABASE = MEMORY CATALOG
 
-MANAGER = READ/WRITE MEMORY
+SAVE_KNOWLEDGE = WRITE NEW KNOWLEDGE
 
-REGISTRY = KNOW WHAT TOOLS EXIST
+UPDATE_KNOWLEDGE = CHANGE EXISTING KNOWLEDGE
 
-EXECUTOR = RUN TOOLS
+SAVE_EXPERIENCE = WRITE A SOLVED CHALLENGE
 
-SANDBOX = TEMPORARY NEW TOOLS
+RUNNER = CREATE, LIST AND RUN TOOL SCRIPTS
+
+TOOL SCRIPTS = REUSABLE CAPABILITIES
 ```
 
 The system must stay simple.
