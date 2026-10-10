@@ -20,6 +20,7 @@ so disk and database never disagree (spec sections 13, 17).
 """
 
 import os
+import pathlib
 import re
 import sqlite3
 import tempfile
@@ -42,12 +43,25 @@ _UPSERT = (
 
 
 def _connect() -> sqlite3.Connection:
-    """Open the metadata catalog, creating the schema when missing."""
+    """Open the metadata catalog, creating the schema when missing.
+
+    memory.db is derived data. A file that is not a usable database is
+    discarded and recreated rather than raised, so a corrupt catalog cannot
+    strand a Markdown file that has already been written (spec sections 14,
+    38, 39). search.rebuild() restores the rows from the Markdown files.
+    """
     config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.DATABASE_PATH)
-    conn.executescript(config.DATABASE_SCHEMA)
-    conn.commit()
-    return conn
+    for attempt in (1, 2):
+        try:
+            conn = sqlite3.connect(config.DATABASE_PATH)
+            conn.executescript(config.DATABASE_SCHEMA)
+            conn.commit()
+            return conn
+        except sqlite3.DatabaseError:
+            if attempt == 2:
+                raise
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                pathlib.Path(str(config.DATABASE_PATH) + suffix).unlink(missing_ok=True)
 
 
 def _now() -> str:
@@ -206,11 +220,13 @@ def save_knowledge(topic, content, tags=None, technique=None) -> dict | None:
 
     title = name[:-3]
     document = _document(title, content, _text(tags), _text(technique))
-    if not _write_atomic(target, document):
-        return None
 
+    # Open the catalog before writing the file. A catalog that cannot be
+    # opened must not leave a Markdown file behind with no row pointing at it.
     conn = _connect()
     try:
+        if not _write_atomic(target, document):
+            return None
         record = _store(conn, relative, title, _text(tags), _text(technique))
     finally:
         conn.close()

@@ -18,6 +18,7 @@ again when updating, so its searchable metadata is not lost.
 """
 
 import os
+import pathlib
 import re
 import sqlite3
 import tempfile
@@ -39,12 +40,25 @@ _UPSERT = (
 
 
 def _connect() -> sqlite3.Connection:
-    """Open the metadata catalog, creating the schema when missing."""
+    """Open the metadata catalog, creating the schema when missing.
+
+    memory.db is derived data. A file that is not a usable database is
+    discarded and recreated rather than raised, so a corrupt catalog cannot
+    strand a Markdown file that has already been written (spec sections 14,
+    38, 39). search.rebuild() restores the rows from the Markdown files.
+    """
     config.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.DATABASE_PATH)
-    conn.executescript(config.DATABASE_SCHEMA)
-    conn.commit()
-    return conn
+    for attempt in (1, 2):
+        try:
+            conn = sqlite3.connect(config.DATABASE_PATH)
+            conn.executescript(config.DATABASE_SCHEMA)
+            conn.commit()
+            return conn
+        except sqlite3.DatabaseError:
+            if attempt == 2:
+                raise
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                pathlib.Path(str(config.DATABASE_PATH) + suffix).unlink(missing_ok=True)
 
 
 def _now() -> str:

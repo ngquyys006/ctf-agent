@@ -197,7 +197,8 @@ class FullTextSearchTests(MemoryTestCase):
         self.assertTrue(search.search("pinnedword", memory_type="experience"))
         self.assertIn("experiences/lab-pinned.md", search._DOCUMENT_TOKENS)
         config.EXPERIENCE_DIR.joinpath("lab-pinned.md").unlink()
-        search.search("pinnedword", memory_type="experience")
+        search._DOCUMENT_TOKENS.pop("experiences/lab-pinned.md")
+        search.rebuild()
         self.assertNotIn("experiences/lab-pinned.md", search._DOCUMENT_TOKENS)
 
     def test_metadata_change_is_reflected_without_a_rebuild(self):
@@ -243,8 +244,9 @@ class FullTextSearchTests(MemoryTestCase):
         self.assertTrue(search.search("gammaword", memory_type="experience"))
 
     def test_a_restored_catalog_replaces_the_file_metadata_in_results(self):
-        # rebuild() is what normally reconciles the two. Until it runs, search
-        # must still report the catalog's view, not the file's.
+        # rebuild() is what normally reconciles the two. A catalog edited by
+        # hand is out of step with the Markdown, so search repairs it before
+        # answering and reports the file's view, not the edited row's.
         self._lab("lab-override", "Override lab", "filetag", "filetech",
                   "## Challenge Summary\nProse.\n")
         conn = sqlite3.connect(config.DATABASE_PATH)
@@ -253,7 +255,8 @@ class FullTextSearchTests(MemoryTestCase):
             conn.commit()
         finally:
             conn.close()
-        self.assertEqual(search.search("dbtag")[0]["tags"], "dbtag")
+        self.assertEqual(search.search("filetag", memory_type="experience")[0]["tags"], "filetag")
+        self.assertEqual(search.search("dbtag", memory_type="experience"), [])
 
     def test_tied_scores_are_ordered_most_recently_updated_first(self):
         # Several labs of one class score identically. Ordering those by the
@@ -599,15 +602,55 @@ class CatalogTests(MemoryTestCase):
             conn.commit()
         finally:
             conn.close()
-        self.assertEqual(
-            [r["path"] for r in search.search("rebuild-check", memory_type="knowledge")
-             if r["path"] == "knowledge/rebuildable.md"], [])
-
-        self.assertGreaterEqual(search.rebuild(), 1)
+        # search() detects the mismatch on its own, so the wrong path is gone
+        # before rebuild() is asked for. Check the repair directly as well.
+        self.assertEqual(search.rebuild(), 1)
+        self.assertNotIn("knowledge/wrong.md", self._rows())
         found = search.search("rebuild-check", memory_type="knowledge")
         self.assertIn("knowledge/rebuildable.md", [r["path"] for r in found])
         row = self._rows()["knowledge/rebuildable.md"]
         self.assertEqual(row, ("knowledge", "rebuildable", "rebuild-check", "rebuild-check"))
+
+    def test_search_repairs_a_catalog_that_lost_rows(self):
+        # Losing the catalog and then writing a new memory recreates it with
+        # one row. That looks healthy, so an emptiness check would not notice
+        # that every other memory has dropped out of search.
+        self._track_topic("first")
+        save_knowledge.save_knowledge("first", "First body.", tags="firstcheck")
+        config.DATABASE_PATH.unlink()
+        self._track_experience("second")
+        save_experience.save_experience("second", "Second", "Second body.", tags="secondcheck")
+
+        self.assertEqual(search.search("firstcheck", memory_type="knowledge")[0]["path"],
+                         "knowledge/first.md")
+        self.assertEqual(sorted(self._rows()), ["experiences/second.md", "knowledge/first.md"])
+
+    def test_search_indexes_a_file_the_catalog_never_saw(self):
+        self._track_topic("seed")
+        save_knowledge.save_knowledge("seed", "Body.", tags="seedcheck")
+        self._track_topic("orphan")
+        orphan = config.KNOWLEDGE_DIR / "orphan.md"
+        orphan.write_text("# orphan\n\n## Metadata\n\nTitle: orphan\nTags: orphancheck\n",
+                          encoding="utf-8")
+        orphan.chmod(0o644)
+        self.assertEqual([r["path"] for r in
+                          search.search("orphancheck", memory_type="knowledge")],
+                         ["knowledge/orphan.md"])
+
+    def test_search_drops_a_catalog_row_with_no_file_behind_it(self):
+        self._track_topic("real")
+        save_knowledge.save_knowledge("real", "Body.", tags="realcheck")
+        conn = sqlite3.connect(config.DATABASE_PATH)
+        try:
+            conn.execute("INSERT INTO memories (type, title, path, tags, technique,"
+                         " created_at, updated_at) VALUES"
+                         " ('knowledge', 'ghost', 'knowledge/ghost.md', 'ghostcheck',"
+                         "  'ghost', 'x', 'x')")
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(search.search("ghostcheck"), [])
+        self.assertNotIn("knowledge/ghost.md", self._rows())
 
     def test_rebuild_skips_undecodable_files(self):
         # Seed a valid file so the assertion does not depend on whatever memory

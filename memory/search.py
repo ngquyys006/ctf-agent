@@ -223,19 +223,22 @@ def rebuild() -> int:
 
 
 def _heal() -> None:
-    """Rebuild the catalog when it is empty but Markdown files exist.
+    """Rebuild the catalog whenever it does not describe the Markdown files.
 
-    memory.db is derived data: if it is deleted or lost, memory must stay
-    searchable without any manual step (spec sections 38, 39).
+    memory.db is derived data: if it is deleted, lost or written by hand,
+    memory must stay searchable without any manual step (spec sections 38,
+    39). Checking only for an empty catalog is not enough. Losing the catalog
+    and then writing a new memory recreates it with one row, which looks
+    healthy while every other Markdown file has silently dropped out of
+    search. Comparing the row count against the files on disk catches that.
     """
     conn = _connect()
     try:
-        count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        indexed = {row[0] for row in conn.execute("SELECT path FROM memories")}
     finally:
         conn.close()
-    if count:
-        return
-    if any(True for _ in _iter_documents()):
+    present = {relative for _, _, relative in _iter_documents()}
+    if indexed != present:
         rebuild()
 
 
