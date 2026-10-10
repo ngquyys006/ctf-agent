@@ -25,15 +25,24 @@ import config
 MEMORY_TYPES = ("knowledge", "experience")
 
 # Simple relevance ranking (spec section 33): exact title first, then
-# technique, tags, keywords, substring - weighted by how much of the query is
-# covered, so scores are graded instead of tied. No embeddings, no vector DB.
+# technique, tags, keywords, full-text, substring - weighted by how much of
+# the query is covered, so scores are graded instead of tied. No embeddings,
+# no vector DB. Metadata outranks full text, so a record named by its tags is
+# still ranked above one that merely mentions the words in its body.
 _SCORE_EXACT_TITLE = 1.0
 _SCORE_TECHNIQUE = 0.35
 _SCORE_TAG = 0.25
 _SCORE_TECHNIQUE_KEYWORD = 0.15
 _SCORE_TITLE_KEYWORD = 0.15
 _SCORE_PATH_KEYWORD = 0.10
+_SCORE_FULLTEXT = 0.10
 _SCORE_SUBSTRING = 0.05
+
+# Token sets of the Markdown bodies, keyed by memory-relative path and valid
+# only for the mtime they were read at. Bodies are read for scoring alone and
+# are never returned to the Agent, so the catalog still stores metadata only
+# (spec sections 14, 99) and context stays bounded (spec section 32).
+_CONTENT_TOKENS: dict[str, tuple[float, frozenset]] = {}
 
 _SELECT = "SELECT id, type, title, path, tags, technique FROM memories"
 _UPSERT = (
@@ -121,6 +130,37 @@ def _document_exists(relative: str) -> bool:
     return (config.MEMORY_DIR / relative).is_file()
 
 
+def _content_tokens(relative: str) -> frozenset:
+    """Return the token set of a memory file's body (spec section 33).
+
+    This is what lets a query naming something only the notes mention - a
+    payload function, a library name, an error string - still find the
+    record. Metadata cannot do this: tags are chosen when the memory is
+    written, but the words that identify a new challenge are whatever the
+    target happens to expose.
+
+    The catalog deliberately stores no content, so the body is read here and
+    cached against the file mtime. Editing or deleting a memory therefore
+    invalidates its entry on the next search without any explicit step.
+    Unreadable or undecodable files yield an empty set rather than raising.
+    """
+    path = config.MEMORY_DIR / relative
+    try:
+        stamp = path.stat().st_mtime
+    except OSError:
+        _CONTENT_TOKENS.pop(relative, None)
+        return frozenset()
+    cached = _CONTENT_TOKENS.get(relative)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    try:
+        tokens = frozenset(_tokenize(path.read_text(encoding="utf-8")))
+    except (OSError, UnicodeDecodeError):
+        tokens = frozenset()
+    _CONTENT_TOKENS[relative] = (stamp, tokens)
+    return tokens
+
+
 def rebuild() -> int:
     """Rebuild the catalog from the Markdown files.
 
@@ -170,13 +210,15 @@ def _heal() -> None:
         rebuild()
 
 
-def _score(record: dict, query_lower: str, tokens: list[str]) -> float:
+def _score(record: dict, query_lower: str, tokens: list[str],
+           content_tokens: frozenset) -> float:
     """Score one catalog record against a query (spec section 33).
 
-    Matches title, tags, technique and the record's own path, so a query
-    naming the file (a challenge ID such as "xebec-ssti2-charfilter")
-    still finds the record. The path is already stored in the catalog, so
-    this adds recall without touching the Markdown files.
+    Matches title, tags, technique, the record's own path - so a query naming
+    the file (a challenge ID such as "xebec-ssti2-charfilter") still finds it -
+    and the Markdown body. Metadata is tried first and weighted higher, so a
+    record explicitly tagged or titled with the query outranks one that only
+    mentions the words in passing.
     """
     if not tokens:
         return 0.0
@@ -200,7 +242,12 @@ def _score(record: dict, query_lower: str, tokens: list[str]) -> float:
         hits = sum(1 for token in tokens if token in set(_tokenize(field)))
         if hits:
             score += weight * (hits / total)
-    # 6. Fallback substring match in tags/technique.
+    # 6. Full-text match over the Markdown body (spec section 33).
+    if content_tokens:
+        hits = sum(1 for token in tokens if token in content_tokens)
+        if hits:
+            score += _SCORE_FULLTEXT * (hits / total)
+    # 7. Fallback substring match in tags/technique.
     if any(token in tags or token in technique for token in tokens):
         score += _SCORE_SUBSTRING
     return min(score, 1.0)
@@ -209,13 +256,15 @@ def _score(record: dict, query_lower: str, tokens: list[str]) -> float:
 def search(query: str, memory_type: str | None = None, limit: int = 5) -> list[dict]:
     """Search memory and return ranked candidates.
 
-    The query is matched against title, tags, and technique metadata only
-    (the catalog stores no memory content). Records whose Markdown file no
-    longer exists are skipped, so search never returns a dead entry.
-    Returns records ordered by descending score, each with id, type, title,
-    path, tags, technique, and score. An empty list means nothing matched -
-    a valid outcome, not an error. The Agent makes the final judgment about
-    whether a candidate is relevant.
+    The query is matched against the catalog metadata (title, tags,
+    technique, path) and against the Markdown body of each candidate, so a
+    term that only the notes mention still retrieves the record (spec
+    section 33). Bodies are read only to score; they are never returned here.
+    Records whose Markdown file no longer exists are skipped, so search never
+    returns a dead entry. Returns records ordered by descending score, each
+    with id, type, title, path, tags, technique, and score. An empty list
+    means nothing matched - a valid outcome, not an error. The Agent makes
+    the final judgment about whether a candidate is relevant.
     """
     if memory_type is not None and memory_type not in MEMORY_TYPES:
         raise ValueError(
@@ -247,8 +296,11 @@ def search(query: str, memory_type: str | None = None, limit: int = 5) -> list[d
             "technique": row[5] or "",
         }
         if not _document_exists(record["path"]):
+            # Drop the cached body too, so a memory deleted outside the
+            # modules cannot pin its tokens in memory forever.
+            _CONTENT_TOKENS.pop(record["path"], None)
             continue
-        score = _score(record, query_lower, tokens)
+        score = _score(record, query_lower, tokens, _content_tokens(record["path"]))
         if score > 0.0:
             scored.append((score, record))
 

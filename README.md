@@ -101,7 +101,8 @@ challenges).
 * **Targeted retrieval only.** Agent formulates targeted queries to
   search memory proactively on every challenge. Searches are ranked (exact title match first, then
   technique, tag, and keyword matches, weighted by how much of the query is
-  covered) and limited (default 5 results). There is no operation that loads
+  covered, then full-text matches against the Markdown body, then substring)
+  and limited (default 5 results). There is no operation that loads
   all memory.
 * **Writes go through the memory modules.** Each writing module validates the
   name, prevents writes outside the memory directories, writes the Markdown

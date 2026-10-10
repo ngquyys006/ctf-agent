@@ -38,6 +38,12 @@ class MemoryTestCase(unittest.TestCase):
     def _track_experience(self, exp_id):
         self.addCleanup(config.EXPERIENCE_DIR.joinpath(f"{exp_id}.md").unlink, missing_ok=True)
 
+    def _knowledge(self, topic, tags, technique, body="Body."):
+        self._track_topic(topic)
+        record = save_knowledge.save_knowledge(topic, body, tags=tags, technique=technique)
+        self.assertIsNotNone(record)
+        return record
+
     def _rows(self):
         conn = sqlite3.connect(config.DATABASE_PATH)
         try:
@@ -49,12 +55,6 @@ class MemoryTestCase(unittest.TestCase):
 
 class SearchTests(MemoryTestCase):
     """Targeted retrieval (spec sections 16, 32, 33)."""
-
-    def _knowledge(self, topic, tags, technique, body="Body."):
-        self._track_topic(topic)
-        record = save_knowledge.save_knowledge(topic, body, tags=tags, technique=technique)
-        self.assertIsNotNone(record)
-        return record
 
     def test_search_ranks_exact_title_first(self):
         self._knowledge("alpha", "alpha", "alpha")
@@ -124,6 +124,81 @@ class SearchTests(MemoryTestCase):
         results = search.search("healed", memory_type="knowledge")
         self.assertTrue(config.DATABASE_PATH.exists())
         self.assertEqual([r["path"] for r in results], ["knowledge/healed.md"])
+
+
+class FullTextSearchTests(MemoryTestCase):
+    """Matching words that only the body of a memory mentions (spec section 33)."""
+
+    def _lab(self, exp_id, title, tags, technique, body):
+        self._track_experience(exp_id)
+        record = save_experience.save_experience(exp_id, title, body,
+                                                tags=tags, technique=technique)
+        self.assertIsNotNone(record)
+        return record
+
+    def test_search_finds_a_term_that_only_the_body_mentions(self):
+        # Tags are chosen once, when the memory is written. The words that
+        # identify the *next* challenge are whatever the target exposes, and
+        # those are exactly the words no tag carries.
+        self._lab("lab-dom", "DOM XSS", "xss, dom, javascript, web", "xss",
+                  "## Challenge Summary\nThe sink is innerHTML fed by location.hash.\n"
+                  "A document.write call needed a jQuery hook to reach the flag.")
+        for term in ("innerHTML", "location.hash", "document.write", "jQuery"):
+            hits = search.search(term, memory_type="experience")
+            self.assertIn("experiences/lab-dom.md", [r["path"] for r in hits], term)
+
+    def test_metadata_outranks_a_body_only_match(self):
+        self._lab("lab-tagged", "Generic lab", "sql-injection, sqli", "sql-injection",
+                  "## Challenge Summary\nNothing about this one.\n")
+        self._lab("lab-mentioned", "Web misc", "web, misc", "web",
+                  "## Challenge Summary\nThis paragraph mentions sql-injection in passing.\n")
+        ranked = [r["path"] for r in search.search("sql injection", memory_type="experience")]
+        self.assertEqual(ranked[0], "experiences/lab-tagged.md")
+        self.assertEqual(ranked, ["experiences/lab-tagged.md", "experiences/lab-mentioned.md"])
+        self.assertGreater(search.search("sql injection", memory_type="experience")[0]["score"],
+                           search.search("sql injection", memory_type="experience")[1]["score"])
+
+    def test_full_text_is_capped_below_an_exact_title(self):
+        self._knowledge("cap-check", "generic", "generic",
+                        "Body repeating cap-check many times: cap-check cap-check cap-check.")
+        self.assertLess(search.search("cap check")[0]["score"], 1.0)
+
+    def test_body_changes_are_picked_up_without_a_rebuild(self):
+        self._lab("lab-mutable", "Mutable lab", "web", "web", "## Challenge Summary\nOriginal body.\n")
+        self.assertEqual(search.search("brandyneuniqueword", memory_type="experience"), [])
+        path = config.EXPERIENCE_DIR / "lab-mutable.md"
+        path.write_text(path.read_text(encoding="utf-8") + "\nbrandyneuniqueword added.\n",
+                        encoding="utf-8")
+        path.chmod(0o644)
+        self.assertIn("experiences/lab-mutable.md",
+                      [r["path"] for r in
+                       search.search("brandyneuniqueword", memory_type="experience")])
+        config.EXPERIENCE_DIR.joinpath("lab-mutable.md").unlink()
+        self.assertEqual(search.search("brandyneuniqueword", memory_type="experience"), [])
+
+    def test_search_never_returns_body_content(self):
+        self._lab("lab-secret", "Quiet lab", "quiet", "quiet",
+                  "## Challenge Summary\nsupersecretflagvalue only in the body.\n")
+        results = search.search("supersecretflagvalue", memory_type="experience")
+        self.assertTrue(results)
+        for record in results:
+            self.assertNotIn("supersecretflagvalue", " ".join(str(v) for v in record.values()))
+
+    def test_undecodable_body_does_not_break_search(self):
+        broken = config.KNOWLEDGE_DIR / "broken-body.md"
+        broken.write_bytes(b"\xff\xfe\x00bad\xff")
+        self.addCleanup(broken.unlink, missing_ok=True)
+        self._knowledge("intact", "intact", "intact")
+        self.assertTrue(search.search("intact", memory_type="knowledge"))
+        self.assertEqual(search.search("bad", memory_type="knowledge"), [])
+
+    def test_a_deleted_memory_does_not_pin_its_cached_tokens(self):
+        self._lab("lab-pinned", "Pinned lab", "web", "web", "## Challenge Summary\npinnedword here.\n")
+        self.assertTrue(search.search("pinnedword", memory_type="experience"))
+        self.assertIn("experiences/lab-pinned.md", search._CONTENT_TOKENS)
+        config.EXPERIENCE_DIR.joinpath("lab-pinned.md").unlink()
+        search.search("pinnedword", memory_type="experience")
+        self.assertNotIn("experiences/lab-pinned.md", search._CONTENT_TOKENS)
 
 
 class ReadTests(MemoryTestCase):

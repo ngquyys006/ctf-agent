@@ -1263,8 +1263,16 @@ Search relevance can use:
 2. Technique matches.
 3. Tag matches.
 4. Keyword matches.
-5. Full-text matches.
+5. Full-text matches against the Markdown body.
 6. Optional SQLite FTS ranking.
+
+Signals 1-5 are implemented. They are weighted so that metadata outranks the
+body: a memory tagged or titled with the query ranks above one that merely
+mentions the words. Full-text matters because tags are chosen once, when the
+memory is written, while the terms that identify the next challenge are
+whatever the target happens to expose. The catalog still stores metadata
+only; bodies are read to score them and cached against file mtime, and are
+never returned to Agent.
 
 Example:
 
